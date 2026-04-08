@@ -1,0 +1,10 @@
+{
+  "ticketmaster_url": "https://www.ticketmaster.com.br/event/bts-world-tour-arirang",
+  "whatsapp_group_name": "ARMYs amigas jamais serão vencidas",
+  "check_interval_seconds": 60,
+  "keywords": ["BTS", "ingressos", "disponível"],
+  "block_keywords": ["esgotado", "sold out", "indisponível", "sem ingressos"],
+  "status_keywords": ["status", "atualiza", "como está", "tem ingresso", "tem tickets", "chegou"],
+  "message_template": "🟢 BTS disponível!\n\nLink: {url}\n\nDetectado em: {time}\n\nInformações encontradas:\n{snippet}",
+  "status_message_template": "🔎 Status atual:\n{status}\n\nLink: {url}\nÚltima verificação: {time}\n\nInformações:\n{snippet}"
+}

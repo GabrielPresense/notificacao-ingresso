@@ -1,0 +1,16 @@
+{
+  "name": "notificacao-de-ingresso",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node whatsapp_ticketmaster_notifier.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0-rc.12",
+    "puppeteer": "^24.15.0",
+    "whatsapp-web.js": "^1.23.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "max_status_replies_per_hour": 5, 
+  "headless_mode": false
+}

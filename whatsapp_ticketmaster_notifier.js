@@ -3,8 +3,9 @@ import path from "path";
 import { fileURLToPath } from "url";
 import puppeteer from "puppeteer";
 import * as cheerio from "cheerio";
-import { Client, LocalAuth } from "whatsapp-web.js";
+import whatsappWeb from "whatsapp-web.js";
 import qrcode from "qrcode-terminal";
+const { Client, LocalAuth } = whatsappWeb;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,10 +50,21 @@ function parseTicketmaster(html, config) {
   const text = $.text().replace(/\s+/g, " ").trim().toLowerCase();
   const hasKeyword = config.keywords.some((keyword) => text.includes(keyword.toLowerCase()));
   const hasBlock = config.block_keywords.some((block) => text.includes(block.toLowerCase()));
-  if (hasKeyword && !hasBlock) {
-    return { available: true, snippet: extractSnippet(text, config.keywords) };
+  if (hasBlock) {
+    return {
+      available: false,
+      state: "sold_out",
+      snippet: extractSnippet(text, config.block_keywords),
+    };
   }
-  return { available: false };
+  if (hasKeyword) {
+    return {
+      available: true,
+      state: "on_sale",
+      snippet: extractSnippet(text, config.keywords),
+    };
+  }
+  return { available: false, state: "unknown", snippet: extractSnippet(text, config.keywords) };
 }
 
 function extractSnippet(text, keywords, maxLen = 400) {
@@ -71,13 +83,6 @@ function extractSnippet(text, keywords, maxLen = 400) {
   return text.slice(start, end).trim();
 }
 
-function buildMessage(config, snippet) {
-  return config.message_template
-    .replace("{url}", config.ticketmaster_url)
-    .replace("{snippet}", snippet)
-    .replace("{time}", new Date().toLocaleString());
-}
-
 function buildStatusMessage(config, available, snippet) {
   const status = available ? "Ingressos podem estar disponíveis." : "Sem disponibilidade no momento.";
   return config.status_message_template
@@ -87,11 +92,27 @@ function buildStatusMessage(config, available, snippet) {
     .replace("{snippet}", snippet || "");
 }
 
+function getHumanStatus(state) {
+  if (state === "on_sale") {
+    return "🟢 Em venda";
+  }
+  if (state === "sold_out") {
+    return "🔴 Esgotado";
+  }
+  return "🟡 Indeterminado";
+}
+
 function getInterval(config) {
   if (config.check_interval_seconds) {
     return config.check_interval_seconds * 1000;
   }
   return (config.check_interval_minutes || 5) * 60 * 1000;
+}
+
+/** Conversa 1:1 clássica (evita msg.getChat(), que quebra em Canais com whatsapp-web.js). */
+function isPrivateDirectChat(msg) {
+  const id = msg.fromMe ? msg.to : msg.from;
+  return typeof id === "string" && id.endsWith("@c.us");
 }
 
 async function main() {
@@ -122,16 +143,24 @@ async function main() {
   });
 
   client.on("message", async (msg) => {
-    const chat = await msg.getChat();
-    if (chat.isGroup && chat.name === config.whatsapp_group_name) {
-      const lower = msg.body.toLowerCase();
+    try {
+      if (!isPrivateDirectChat(msg)) {
+        return;
+      }
+      const lower = (msg.body || "").toLowerCase();
       if (config.status_keywords.some((keyword) => lower.includes(keyword.toLowerCase()))) {
-        console.log("Pergunta de status detectada. Respondendo...");
+        console.log("Solicitacao de status detectada no privado. Respondendo...");
         const html = await fetchPage(page, config.ticketmaster_url);
-        const { available, snippet } = parseTicketmaster(html, config);
-        const reply = buildStatusMessage(config, available, snippet);
+        const { available, state, snippet } = parseTicketmaster(html, config);
+        const reply = buildStatusMessage(
+          config,
+          available,
+          `${getHumanStatus(state)}\n${snippet || ""}`.trim()
+        );
         await msg.reply(reply);
       }
+    } catch (err) {
+      console.error("Erro ao processar mensagem do WhatsApp:", err.message || err);
     }
   });
 
@@ -142,38 +171,21 @@ async function main() {
     client.once("ready", resolve);
   });
 
-  // Encontrar o grupo
-  const chats = await client.getChats();
-  const group = chats.find(chat => chat.isGroup && chat.name === config.whatsapp_group_name);
-  if (!group) {
-    console.error(`Grupo "${config.whatsapp_group_name}" não encontrado. Verifique o nome.`);
-    console.log("Grupos disponíveis:");
-    chats.filter(chat => chat.isGroup).forEach(chat => console.log(`- ${chat.name}`));
-    await browser.close();
-    return;
-  }
-
-  console.log(`Grupo encontrado: "${group.name}". Iniciando monitoramento a cada ${config.check_interval_seconds} segundos...`);
+  console.log(`Monitoramento iniciado. Resposta de status apenas no privado. Intervalo: ${config.check_interval_seconds} segundos.`);
 
 
   while (true) {
     console.log(`[${new Date().toISOString()}] Verificando Ticketmaster...`);
     const html = await fetchPage(page, config.ticketmaster_url);
-    const { available, snippet } = parseTicketmaster(html, config);
-    const status = available ? "available" : "not_available";
+    const { state } = parseTicketmaster(html, config);
+    const status = state;
 
-    if (available && status !== lastSent) {
-      const message = buildMessage(config, snippet);
-      console.log("Disponibilidade encontrada! Enviando mensagem no WhatsApp...");
-      await group.sendMessage(message);
+    if (status !== lastSent) {
+      console.log(`Mudança detectada (${getHumanStatus(state)}). Sem envio automatico para grupo.`);
       saveLastSent(status);
       lastSent = status;
     } else {
-      console.log(available ? "Ainda disponível, sem nova mensagem." : "Sem disponibilidade no momento.");
-      if (status !== lastSent) {
-        saveLastSent(status);
-        lastSent = status;
-      }
+      console.log(`Sem mudança de estado: ${getHumanStatus(state)}.`);
     }
 
     const interval = getInterval(config);
